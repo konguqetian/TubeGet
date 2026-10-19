@@ -42,10 +42,44 @@ def user_data_dir() -> Path:
     return p
 
 
-def bundled_ffmpeg() -> Path:
-    """打包进来的 ffmpeg 静态二进制。"""
+def bundled_ffmpeg() -> Path | None:
+    """定位随包发行的 ffmpeg 静态二进制，找不到返回 None。
+
+    PyInstaller 在不同平台/版本下安放位置有差异：
+      - Windows/Linux onedir：<dist>/bin/ffmpeg[.exe]
+      - macOS BUNDLE：Contents/Frameworks/bin/ffmpeg[.exe]（即 _MEIPASS/bin）
+    另外历史版本里二进制名带平台与版本后缀（ffmpeg-macos-aarch64-v7.1），
+    因此除精确名外再做一次有界递归兜底。
+    """
     name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-    return bundle_dir() / "bin" / name
+
+    candidates: list[Path] = [bundle_dir() / "bin" / name]
+
+    if is_frozen():
+        # macOS .app 下 _MEIPASS 指向 Contents/Frameworks，可执行文件在 Contents/MacOS
+        exe_dir = Path(sys.executable).resolve().parent
+        contents = exe_dir.parent
+        candidates += [
+            contents / "MacOS" / "bin" / name,
+            contents / "Frameworks" / "bin" / name,
+            contents / "Resources" / "bin" / name,
+        ]
+    else:
+        candidates.append(bundle_dir() / name)
+
+    for c in candidates:
+        if c.is_file():
+            return c
+
+    # 兜底：在 _MEIPASS 下有界递归找 ffmpeg*（1~3 层，避免扫整包）
+    root = bundle_dir()
+    if root.is_dir():
+        for depth in (1, 2, 3):
+            pattern = "/".join(["*"] * depth)
+            for c in sorted(root.glob(f"{pattern}/ffmpeg*")):
+                if c.is_file():
+                    return c
+    return None
 
 
 def find_ffmpeg(custom_path: str | None = None) -> str | None:
@@ -53,7 +87,7 @@ def find_ffmpeg(custom_path: str | None = None) -> str | None:
     if custom_path and Path(custom_path).exists():
         return str(Path(custom_path))
     b = bundled_ffmpeg()
-    if b.exists():
+    if b is not None:
         return str(b)
     return which("ffmpeg")
 

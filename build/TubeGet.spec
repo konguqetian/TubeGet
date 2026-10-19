@@ -9,13 +9,22 @@
 
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
 import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).parent
-FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+FFMPEG_SRC = Path(imageio_ffmpeg.get_ffmpeg_exe())
+
+# imageio-ffmpeg 的二进制名带平台与版本后缀（如 ffmpeg-macos-aarch64-v7.1），
+# 运行时按规范名 ffmpeg / ffmpeg.exe 查找，因此先复制成固定名再打包。
+FFMPEG_NAME = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+FFMPEG = ROOT / "build" / ".cache" / FFMPEG_NAME
+FFMPEG.parent.mkdir(parents=True, exist_ok=True)
+if not FFMPEG.exists() or FFMPEG.stat().st_size != FFMPEG_SRC.stat().st_size:
+    shutil.copy2(FFMPEG_SRC, FFMPEG)
 
 _src = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
 APP_NAME = re.search(r'APP_NAME\s*=\s*"([^"]+)"', _src).group(1)
