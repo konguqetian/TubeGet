@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from config import FORMAT_PRESETS, Config
 from engine import Engine
+import net
 from platform_paths import (
     find_ffmpeg,
     machine_arch,
@@ -91,19 +92,23 @@ class EngineTask(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, mode: str, parent=None):
+    def __init__(self, mode: str, proxy: str = "", ssl_mode: str = "compat", parent=None):
         super().__init__(parent)
         self.mode = mode  # ensure | update
+        self.proxy = proxy
+        self.ssl_mode = ssl_mode
 
     def run(self) -> None:
         try:
-            eng = Engine()
+            eng = Engine(self.proxy, self.ssl_mode)
             if self.mode == "ensure" and eng.installed:
                 self.succeeded.emit(eng.version())
                 return
             v = eng.install_or_update(progress=lambda d, t: self.progress.emit(d, t),
                                       log=lambda m: self.message.emit(m))
             self.succeeded.emit(v)
+        except net.NetworkError as e:
+            self.failed.emit(f"{e}\n\n{e.hint}")
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -113,19 +118,23 @@ class UpdateCheckTask(QThread):
     nothing = Signal()
     failed = Signal(str)
 
-    def __init__(self, repo: str, version: str, parent=None):
+    def __init__(self, repo: str, version: str, proxy: str = "", ssl_mode: str = "compat", parent=None):
         super().__init__(parent)
         self.repo = repo
         self.version = version
+        self.proxy = proxy
+        self.ssl_mode = ssl_mode
 
     def run(self) -> None:
         try:
-            u = AppUpdater(self.repo, self.version)
+            u = AppUpdater(self.repo, self.version, self.proxy, self.ssl_mode)
             info = u.available_update()
             if info:
                 self.found.emit(info)
             else:
                 self.nothing.emit()
+        except net.NetworkError as e:
+            self.failed.emit(f"{e}\n\n{e.hint}")
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -135,17 +144,93 @@ class UpdateDownloadTask(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, repo: str, version: str, info: dict, parent=None):
+    def __init__(self, repo: str, version: str, info: dict,
+                 proxy: str = "", ssl_mode: str = "compat", parent=None):
         super().__init__(parent)
         self.repo, self.version, self.info = repo, version, info
+        self.proxy, self.ssl_mode = proxy, ssl_mode
 
     def run(self) -> None:
         try:
-            u = AppUpdater(self.repo, self.version)
+            u = AppUpdater(self.repo, self.version, self.proxy, self.ssl_mode)
             p = u.download(self.info, progress=lambda d, t: self.progress.emit(d, t))
             self.succeeded.emit(str(p))
+        except net.NetworkError as e:
+            self.failed.emit(f"{e}\n\n{e.hint}")
         except Exception as e:
             self.failed.emit(str(e))
+
+
+class NetDiagTask(QThread):
+    done = Signal(str)
+
+    def __init__(self, proxy: str = "", ssl_mode: str = "compat", parent=None):
+        super().__init__(parent)
+        self.proxy, self.ssl_mode = proxy, ssl_mode
+
+    def run(self) -> None:
+        import socket
+        import ssl as _ssl
+
+        import net
+        from engine import Engine
+        from version import ENGINE_REPO
+
+        lines: list[str] = []
+
+        def row(ok: str | None, label: str, detail: str = "") -> None:
+            mark = "✔" if ok else "✘"
+            lines.append(f"{mark} {label}" + (f"：{detail}" if detail else ""))
+
+        # 代理
+        proxy = self.proxy or net.detected_proxy()
+        row(True, "代理设置", proxy or "未检测到（直连）")
+
+        # CA 证书
+        info = net.ca_bundle_info(self.ssl_mode)
+        row(bool(info["effective"]), "CA 证书",
+            f"{info['cert_count']} 张根证书 · 模式 {self.ssl_mode}" if info["effective"] else "未找到")
+        if info["system"]:
+            row(True, "系统信任库", info["system"])
+        else:
+            row(None, "系统信任库", "未导出（不影响严格模式）")
+
+        # DNS / TLS
+        for host in ("api.github.com", "www.youtube.com"):
+            try:
+                ip = socket.gethostbyname(host)
+                row(True, f"DNS {host}", ip)
+            except Exception as e:
+                row(False, f"DNS {host}", str(e))
+        try:
+            ctx = net.make_context(self.ssl_mode)
+            with socket.create_connection(("api.github.com", 443), timeout=10) as s:
+                with ctx.wrap_socket(s, server_hostname="api.github.com") as ss:
+                    row(True, "TLS 握手 api.github.com", ss.version())
+        except Exception as e:
+            row(False, "TLS 握手 api.github.com", str(e))
+
+        # GitHub API
+        try:
+            data = net.get_json(f"https://api.github.com/repos/{ENGINE_REPO}/releases/latest",
+                                timeout=20, proxy=self.proxy, ssl_mode=self.ssl_mode)
+            row(True, "GitHub API", data.get("tag_name", ""))
+        except Exception as e:
+            row(False, "GitHub API", str(e))
+
+        # 引擎
+        try:
+            eng = Engine(self.proxy, self.ssl_mode)
+            local = eng.version() or "未安装"
+            rel = eng.latest_release()
+            row(True, "下载引擎", f"本地 {local} / 最新 {rel['tag']}")
+        except Exception as e:
+            row(False, "下载引擎", str(e))
+
+        lines.append("")
+        lines.append(f"平台：{platform_key()} · {machine_arch()}   "
+                     f"产物：{current_asset_name() or '（未定义）'}")
+        self.done.emit("\n".join(lines))
 
 
 # ---------------------------------------------------------------- 主窗口
@@ -153,7 +238,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.cfg = Config.global_instance()
-        self.engine = Engine()
+        self.engine = Engine(self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat")
         self.worker: DownloadWorker | None = None
 
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
@@ -171,7 +256,7 @@ class MainWindow(QMainWindow):
         m.setStyleSheet("QMenuBar{background:#16171a;} QMenuBar::item:selected{background:#2f3137;}")
 
         app_menu = m.addMenu("应用")
-        a_repo = QAction("更新源设置…", self)
+        a_repo = QAction("更新与网络设置…", self)
         a_repo.triggered.connect(self._edit_update_repo)
         a_data = QAction("打开数据目录", self)
         a_data.triggered.connect(lambda: open_path(user_data_dir()))
@@ -192,8 +277,11 @@ class MainWindow(QMainWindow):
         upd.addAction(a_app)
 
         h = m.addMenu("帮助")
+        a_diag = QAction("网络诊断…", self)
+        a_diag.triggered.connect(self._net_diag)
         a_about = QAction("关于", self)
         a_about.triggered.connect(self._about)
+        h.addAction(a_diag)
         h.addAction(a_about)
 
     # ---------------- 界面 ----------------
@@ -380,6 +468,7 @@ class MainWindow(QMainWindow):
             "embed_metadata": self.chk_meta.isChecked(),
             "embed_thumbnail": self.chk_thumb.isChecked(),
             "ffmpeg_path": self.ff_edit.text().strip(),
+            "ssl_mode": self.cfg.get("ssl_mode") or "compat",
         }
 
     def _persist(self) -> None:
@@ -457,9 +546,15 @@ class MainWindow(QMainWindow):
             dlg.close()
             self._log(f"[错误] 引擎更新失败：{e}")
             if manual or ensure:
-                QMessageBox.warning(self, "引擎更新失败", f"{e}\n\n可稍后重试，或在应用内更换网络/代理后再次检查。")
+                hint = getattr(e, "hint", "") or ""
+                QMessageBox.warning(
+                    self, "引擎更新失败",
+                    f"{e}\n\n{hint}\n\n可稍后重试，或在应用内更换网络/代理后再次检查。",
+                )
 
-        self._eng_task = EngineTask(mode, self)
+        self._eng_task = EngineTask(
+            mode, self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat", self
+        )
         self._eng_task.message.connect(on_msg)
         self._eng_task.progress.connect(on_prog)
         self._eng_task.succeeded.connect(on_ok)
@@ -467,26 +562,63 @@ class MainWindow(QMainWindow):
         dlg.canceled.connect(self._eng_task.requestInterruption)
         self._eng_task.start()
 
+    # ---------------- 网络诊断 ----------------
+    def _net_diag(self) -> None:
+        dlg = QProgressDialog("正在诊断网络…", "关闭", 0, 0, self)
+        dlg.setWindowTitle("网络诊断")
+        dlg.setWindowModality(Qt.WindowModal)
+
+        def on_done(text: str):
+            dlg.close()
+            box = QMessageBox(self)
+            box.setWindowTitle("网络诊断结果")
+            box.setStyleSheet(QSS)
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            box.setText(text)
+            box.setFont(QFont("SF Mono", 12))
+            box.exec()
+
+        t = NetDiagTask(self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat", self)
+        t.done.connect(on_done)
+        self._diag_task = t
+        t.start()
+        dlg.exec()
+
     # ---------------- 应用自更新 ----------------
     def _updater(self) -> AppUpdater:
-        return AppUpdater(self.cfg.get("update_repo") or "", APP_VERSION)
+        return AppUpdater(
+            self.cfg.get("update_repo") or "", APP_VERSION,
+            self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat",
+        )
 
     def _edit_update_repo(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("更新源设置")
+        dlg.setWindowTitle("更新与网络设置")
         dlg.setStyleSheet(QSS)
         form = QFormLayout(dlg)
         edit = QLineEdit(self.cfg.get("update_repo") or "")
-        edit.setPlaceholderText("例如 yourname/TubeGet")
+        edit.setPlaceholderText("例如 konguqetian/TubeGet")
         chk = QCheckBox("启动时自动升级下载引擎")
         chk.setChecked(bool(self.cfg.get("keep_engine_updated")))
+        ssl_combo = QComboBox()
+        for key, label in net.SSL_MODES:
+            ssl_combo.addItem(label, key)
+        idx = ssl_combo.findData(self.cfg.get("ssl_mode") or "compat")
+        if idx >= 0:
+            ssl_combo.setCurrentIndex(idx)
         form.addRow("应用更新仓库（GitHub）", edit)
+        form.addRow("证书校验", ssl_combo)
         form.addRow("", chk)
         note = QLabel(
-            "应用外壳从此仓库的 Release 拉取更新；\n"
-            "下载引擎始终从官方 yt-dlp/yt-dlp 拉取，与此项无关。"
+            "应用外壳从此仓库的 Release 拉取更新；下载引擎始终从官方 yt-dlp/yt-dlp 拉取。\n"
+            "证书校验：\n"
+            "· 严格 —— 只用随包分发的根证书；\n"
+            "· 自动兼容 —— 额外合并系统信任库，兼容 Clash/Surge 等本地代理的自签证书（推荐）；\n"
+            "· 关闭校验 —— 不验证证书，仅在上述方式都无效时临时使用。\n"
+            "代理地址在「高级选项 → 代理」中填写，对引擎下载与视频下载同时生效。"
         )
         note.setStyleSheet("color:#9aa0aa;")
+        note.setWordWrap(True)
         form.addRow("", note)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
@@ -495,6 +627,9 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.cfg.set("update_repo", edit.text().strip())
             self.cfg.set("keep_engine_updated", chk.isChecked())
+            self.cfg.set("ssl_mode", ssl_combo.currentData())
+            self.engine = Engine(self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat")
+            self._refresh_status()
 
     def _check_app_update(self) -> None:
         u = self._updater()
@@ -524,7 +659,8 @@ class MainWindow(QMainWindow):
             self._log(f"[错误] 检查应用更新失败：{e}")
             QMessageBox.warning(self, "应用更新", f"检查失败：{e}")
 
-        t = UpdateCheckTask(u.repo, APP_VERSION, self)
+        t = UpdateCheckTask(u.repo, APP_VERSION, self.cfg.get("proxy") or "",
+                            self.cfg.get("ssl_mode") or "compat", self)
         t.found.connect(on_found)
         t.nothing.connect(on_none)
         t.failed.connect(on_fail)
@@ -551,7 +687,8 @@ class MainWindow(QMainWindow):
             dlg.close()
             QMessageBox.warning(self, "应用更新", f"下载失败：{e}")
 
-        t = UpdateDownloadTask(self._updater().repo, APP_VERSION, info, self)
+        t = UpdateDownloadTask(self._updater().repo, APP_VERSION, info,
+                               self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat", self)
         t.progress.connect(on_prog)
         t.succeeded.connect(on_ok)
         t.failed.connect(on_fail)
@@ -575,10 +712,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先填写视频地址。")
             return
         if not self.engine.installed:
-            QMessageBox.warning(self, "提示", "下载引擎尚未就绪，请等待初始化完成。")
+            QMessageBox.warning(
+                self, "提示",
+                "下载引擎尚未就绪，请等待初始化完成。\n\n"
+                "若长时间无进展，请用「帮助 → 网络诊断」检查网络，"
+                "或在「高级选项 → 代理」中填写代理地址。",
+            )
             return
 
         self._persist()
+        self.engine = Engine(self.cfg.get("proxy") or "", self.cfg.get("ssl_mode") or "compat")
         outdir = Path(self._collect()["output_dir"])
         outdir.mkdir(parents=True, exist_ok=True)
 

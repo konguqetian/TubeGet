@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+import net
 from platform_paths import find_ffmpeg
 
 PROGRESS_RE = re.compile(
@@ -117,6 +118,18 @@ class DownloadWorker(QThread):
         if sys.platform == "win32":
             creation = {"creationflags": subprocess.CREATE_NO_WINDOW}  # type: ignore[attr-defined]
 
+        # 让引擎子进程复用同一份 CA 证书（含系统信任库），
+        # 既能验证正规证书，也兼容本地代理软件的自签 CA。
+        env = os.environ.copy()
+        try:
+            ca = net.effective_ca_bundle(self.opts.get("ssl_mode") or "compat")
+            if ca and ca.is_file():
+                env["SSL_CERT_FILE"] = str(ca)
+                env["REQUESTS_CA_BUNDLE"] = str(ca)
+                env["CURL_CA_BUNDLE"] = str(ca)
+        except Exception:
+            pass
+
         try:
             self._proc = subprocess.Popen(
                 args,
@@ -126,6 +139,7 @@ class DownloadWorker(QThread):
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                env=env,
                 **creation,
             )
         except Exception as e:

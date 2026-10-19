@@ -24,6 +24,7 @@ DEFAULTS = {
     "keep_engine_updated": True,       # 启动时自动升级 yt-dlp
     "update_repo": "",                 # 应用外壳自更新仓库 owner/repo
     "ffmpeg_path": "",
+    "ssl_mode": "compat",              # strict | compat | off（见 net.SSL_MODES）
 }
 
 FORMAT_PRESETS = {

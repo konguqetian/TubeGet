@@ -13,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import certifi
 import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).parent
@@ -57,8 +58,10 @@ a = Analysis(
     [str(ROOT / "src" / "main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[(FFMPEG, "bin")],
-    datas=[],
-    hiddenimports=["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"],
+    # 必须随包分发根证书：打包后自带 OpenSSL 的默认证书路径是构建机上的路径，
+    # 在用户机器上不存在，会导致所有 HTTPS 请求 CERTIFICATE_VERIFY_FAILED。
+    datas=[(certifi.where(), "certifi")],
+    hiddenimports=["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "certifi"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -2,7 +2,7 @@
 
 基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 的跨平台视频下载器，带图形界面与双通道自动更新。
 
-**下载（v1.0.0）**：https://github.com/konguqetian/TubeGet/releases/latest
+**下载（v1.0.1）**：https://github.com/konguqetian/TubeGet/releases/latest
 
 - **macOS Intel（x86_64）** → `TubeGet-macOS-Intel.dmg`
 - **macOS Apple Silicon（arm64）** → `TubeGet-macOS-AppleSilicon.dmg`
@@ -19,14 +19,14 @@
 
 - 引擎存放于用户数据目录（`~/Library/Application Support/TubeGet/bin/` 或 `%LOCALAPPDATA%\TubeGet\bin\`），
   与安装包解耦，因此**升级引擎不需要重装应用**。
-- 启动时默认自动检查并升级引擎（可在「应用 → 更新源设置」关闭）。
+- 启动时默认自动检查并升级引擎（可在「应用 → 更新与网络设置」关闭）。
 - 应用外壳更新：菜单「更新 → 检查应用更新」，下载安装包到下载目录后手动安装。
 
 ### 配置应用自更新仓库
 
 仓库已就位：`konguqetian/TubeGet`。
 
-1. 在应用内打开「应用 → 更新源设置」，填入 `konguqetian/TubeGet`。
+1. 在应用内打开「应用 → 更新与网络设置」，填入 `konguqetian/TubeGet`。
 2. 确保该仓库的 Release 中包含本平台产物（CI 会自动生成）。
 3. 应用会按平台匹配产物名：macOS Intel → `-macOS-Intel.dmg`，Apple Silicon → `-macOS-AppleSilicon.dmg`，
    Windows → `-Windows-x64-Setup.exe`。
@@ -117,7 +117,42 @@ codesign --force --deep -s - /Applications/TubeGet.app
 
 ---
 
-## 5. ffmpeg
+## 5. 网络与证书
+
+### 为什么需要专门处理证书
+
+PyInstaller 打包会带入**构建机上**的 OpenSSL，其默认根证书路径形如
+`/Library/Frameworks/Python.framework/.../cert.pem`，在用户机器上并不存在。
+于是 `ssl` 默认上下文一张根证书都加载不到，所有 HTTPS 请求都会报
+`CERTIFICATE_VERIFY_FAILED`——包括下载引擎本身。
+
+因此应用做了三件事：
+
+1. **随包分发 certifi 根证书**（`build/TubeGet.spec` 的 `datas`），
+   并显式用它构造 SSL 上下文（`src/net.py`）；
+2. **自动兼容模式**（默认）下额外合并系统信任库：macOS 读
+   `/private/etc/ssl/cert.pem` 并从钥匙串导出用户安装的证书，
+   Windows 读 `ROOT`/`CA` 存储——从而兼容 Clash、Surge 等本地代理的自签 CA；
+3. 下载引擎时把同一份证书通过 `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE`
+   传给 yt-dlp 子进程，视频下载链路同样受益。
+
+证书校验模式在「应用 → 更新与网络设置 → 证书校验」中切换：
+`严格` / `自动兼容（推荐）` / `关闭校验（不安全）`。
+
+### 排障
+
+引擎下载失败时，先用 **「帮助 → 网络诊断」** 看哪一步是红的：
+
+| 现象 | 处理 |
+|---|---|
+| `CERTIFICATE_VERIFY_FAILED` | 证书校验切到「自动兼容」；确认系统时间正确 |
+| 连接超时 / 重置 | 在「高级选项 → 代理」填代理地址，如 `http://127.0.0.1:7890` |
+| 代理环境下浏览器能开 YouTube 但应用不行 | 同上填代理；代理软件若是 TUN/增强模式可改用系统代理模式 |
+| GitHub API 报 403 / 限流 | 匿名调用限 60 次/小时，设置环境变量 `GITHUB_TOKEN` |
+
+---
+
+## 6. ffmpeg
 
 音视频合并依赖 ffmpeg。安装包已内置静态 ffmpeg（来自 `imageio-ffmpeg`），
 无需额外安装。若需换成系统版本，在「高级选项 → ffmpeg」中指定路径。
@@ -134,6 +169,7 @@ TubeGet/
 │   ├── worker.py          下载任务线程与进度解析
 │   ├── engine.py          yt-dlp 引擎安装 / 版本检查 / 升级
 │   ├── updater.py         应用外壳自更新
+│   ├── net.py             网络层：显式 CA 证书、系统信任库合并、代理
 │   ├── config.py          配置持久化
 │   ├── platform_paths.py  跨平台路径解析
 │   └── version.py         版本与发布产物命名
@@ -155,4 +191,6 @@ TubeGet/
 - 批量下载：URL 输入框每行一个地址。
 - 会员 / 年龄限制内容：在「高级选项 → Cookies 来源」选择你的浏览器，复用登录态。
 - 仅提取音频用于剪辑参考：格式选「仅提取音频」，音频格式可选 `wav`。
+- 代理：YouTube 被墙或走本地代理时，在「高级选项 → 代理」填写地址（如 `http://127.0.0.1:7890`），
+  对引擎下载与视频下载同时生效。
 - 请仅下载你拥有权利或已获授权的内容，并遵守平台服务条款与当地法律。

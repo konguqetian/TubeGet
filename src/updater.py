@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.request
 from pathlib import Path
 
+import net
 from platform_paths import downloads_dir, machine_arch, platform_key
 from version import RELEASE_ASSET
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
+SSL_MODES = ("strict", "compat", "off")
 
 
 def _ua() -> str:
@@ -19,15 +19,12 @@ def _ua() -> str:
     return f"{APP_NAME}/{APP_VERSION}"
 
 
-def _get_json(url: str) -> dict:
-    req = urllib.request.Request(
-        url, headers={"User-Agent": _ua(), "Accept": "application/vnd.github+json"}
-    )
+def _headers() -> dict:
+    h = {"User-Agent": _ua(), "Accept": "application/vnd.github+json"}
     tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if tok:
-        req.add_header("Authorization", f"Bearer {tok}")
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode("utf-8"))
+        h["Authorization"] = f"Bearer {tok}"
+    return h
 
 
 def _parse_version(tag: str) -> tuple:
@@ -48,9 +45,12 @@ def current_asset_name() -> str | None:
 
 
 class AppUpdater:
-    def __init__(self, repo: str, current_version: str):
+    def __init__(self, repo: str, current_version: str,
+                 proxy: str | None = None, ssl_mode: str = "compat"):
         self.repo = (repo or "").strip().strip("/")
         self.current_version = current_version
+        self.proxy = (proxy or "").strip()
+        self.ssl_mode = ssl_mode if ssl_mode in SSL_MODES else "compat"
 
     @property
     def configured(self) -> bool:
@@ -60,7 +60,10 @@ class AppUpdater:
         """返回最新发布信息；未配置仓库时返回 None。"""
         if not self.configured:
             return None
-        data = _get_json(API.format(repo=self.repo))
+        data = net.get_json(
+            API.format(repo=self.repo), timeout=30, headers=_headers(),
+            proxy=self.proxy, ssl_mode=self.ssl_mode,
+        )
         want = current_asset_name()
         asset = None
         for a in data.get("assets", []):
@@ -89,19 +92,8 @@ class AppUpdater:
 
     def download(self, info: dict, progress=None) -> Path:
         dest = downloads_dir() / info["asset"]
-        req = urllib.request.Request(info["url"], headers={"User-Agent": _ua()})
-        tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if tok:
-            req.add_header("Authorization", f"Bearer {tok}")
-        with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            while True:
-                chunk = r.read(65536)
-                if not chunk:
-                    break
-                f.write(chunk)
-                done += len(chunk)
-                if progress:
-                    progress(done, total)
+        net.download(
+            info["url"], dest, progress=progress, timeout=300,
+            headers=_headers(), proxy=self.proxy, ssl_mode=self.ssl_mode,
+        )
         return dest

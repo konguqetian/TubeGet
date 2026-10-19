@@ -1,38 +1,29 @@
 """yt-dlp 引擎管理：安装、版本检查、自动升级。
 
 更新源为官方仓库 yt-dlp/yt-dlp 的 GitHub Release，按当前平台选取对应产物。
+所有网络请求都走 net 层（显式 CA 证书 + 代理支持）。
 """
 
 from __future__ import annotations
 
-import json
 import os
-import platform
 import stat
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+import net
 from platform_paths import machine_arch, user_data_dir
 from version import ENGINE_REPO
 
 API_LATEST = f"https://api.github.com/repos/{ENGINE_REPO}/releases/latest"
-UA = "TubeGet/1.0"
+UA = "TubeGet"
+
+SSL_MODES = ("strict", "compat", "off")
 
 
 def _token() -> str | None:
     return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-
-
-def _get_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
-    tok = _token()
-    if tok:
-        req.add_header("Authorization", f"Bearer {tok}")
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode("utf-8"))
 
 
 def asset_for_platform() -> str:
@@ -45,11 +36,13 @@ def asset_for_platform() -> str:
 
 
 class Engine:
-    def __init__(self):
+    def __init__(self, proxy: str | None = None, ssl_mode: str = "compat"):
         self.data_dir = user_data_dir()
         self.bin_dir = self.data_dir / "bin"
         self.bin_dir.mkdir(parents=True, exist_ok=True)
         self.exe = self.bin_dir / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+        self.proxy = (proxy or "").strip()
+        self.ssl_mode = ssl_mode if ssl_mode in SSL_MODES else "compat"
 
     # ---------- 状态 ----------
     @property
@@ -70,7 +63,13 @@ class Engine:
     # ---------- 远程查询 ----------
     def latest_release(self) -> dict:
         """返回 {'tag':..., 'url':..., 'name':..., 'size':...}"""
-        data = _get_json(API_LATEST)
+        headers = {"User-Agent": UA, "Accept": "application/vnd.github+json"}
+        tok = _token()
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        data = net.get_json(
+            API_LATEST, timeout=30, headers=headers, proxy=self.proxy, ssl_mode=self.ssl_mode
+        )
         want = asset_for_platform()
         for a in data.get("assets", []):
             if a["name"] == want:
@@ -126,25 +125,14 @@ class Engine:
         return self.version()
 
     def _download(self, url: str, dest: Path, progress=None) -> None:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        headers = {"User-Agent": UA}
         tok = _token()
         if tok:
-            req.add_header("Authorization", f"Bearer {tok}")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            while True:
-                chunk = r.read(65536)
-                if not chunk:
-                    break
-                f.write(chunk)
-                done += len(chunk)
-                if progress:
-                    progress(done, total)
-        if total and dest.stat().st_size != total:
-            dest.unlink(missing_ok=True)
-            raise RuntimeError("下载文件不完整，已丢弃")
+            headers["Authorization"] = f"Bearer {tok}"
+        net.download(
+            url, dest, progress=progress, timeout=180,
+            headers=headers, proxy=self.proxy, ssl_mode=self.ssl_mode,
+        )
 
 
 def _strip_quarantine(path: Path) -> None:

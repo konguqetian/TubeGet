@@ -2,7 +2,7 @@
 
 APP_NAME = "TubeGet"
 APP_ID = "com.tubeget.app"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_AUTHOR = "TubeGet"
 
 # 应用外壳的自更新仓库（GitHub "owner/repo"）。
