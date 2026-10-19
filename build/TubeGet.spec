@@ -2,7 +2,7 @@
 """PyInstaller 打包配置。
 
 本 spec 只应由对应平台的 runner 执行（PyInstaller 不支持交叉编译）：
-  macOS Intel        -> macos-13
+  macOS Intel        -> macos-15-intel
   macOS Apple Silicon-> macos-14
   Windows x64        -> windows-latest
 """

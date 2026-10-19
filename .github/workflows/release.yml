@@ -25,9 +25,11 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------- macOS Intel (x86_64)
+  # 注意：macos-13 镜像已于 2025-12-04 退役，Intel 现用 macos-15-intel
+  # （该标签计划支持到 2027-08，之后 GitHub Actions 将不再提供 x86_64 macOS runner）
   macos-intel:
     name: macOS Intel (x86_64)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
