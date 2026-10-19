@@ -2,6 +2,8 @@
 
 基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 的跨平台视频下载器，带图形界面与双通道自动更新。
 
+**下载（v1.0.0）**：https://github.com/konguqetian/TubeGet/releases/latest
+
 - **macOS Intel（x86_64）** → `TubeGet-macOS-Intel.dmg`
 - **macOS Apple Silicon（arm64）** → `TubeGet-macOS-AppleSilicon.dmg`
 - **Windows x64** → `TubeGet-Windows-x64-Setup.exe`（Windows on ARM 通过 x64 模拟层运行）
@@ -22,9 +24,12 @@
 
 ### 配置应用自更新仓库
 
-1. 把本项目推到你的 GitHub 仓库，例如 `yourname/TubeGet`。
-2. 在应用内打开「应用 → 更新源设置」，填入 `yourname/TubeGet`。
-3. 确保该仓库的 Release 中包含本平台产物（CI 会自动生成）。
+仓库已就位：`konguqetian/TubeGet`。
+
+1. 在应用内打开「应用 → 更新源设置」，填入 `konguqetian/TubeGet`。
+2. 确保该仓库的 Release 中包含本平台产物（CI 会自动生成）。
+3. 应用会按平台匹配产物名：macOS Intel → `-macOS-Intel.dmg`，Apple Silicon → `-macOS-AppleSilicon.dmg`，
+   Windows → `-Windows-x64-Setup.exe`。
 
 > GitHub API 匿名调用限 60 次/小时。若需要更高配额，设置环境变量 `GITHUB_TOKEN`。
 
@@ -50,11 +55,17 @@ python src/main.py
 
 | 目标平台 | 构建环境 |
 |---|---|
-| macOS Intel | Intel Mac，或 GitHub Actions `macos-13` |
+| macOS Intel | Intel Mac，或 GitHub Actions `macos-15-intel` |
 | macOS Apple Silicon | Apple Silicon Mac，或 GitHub Actions `macos-14` |
 | Windows x64 | Windows 机器，或 GitHub Actions `windows-latest` |
 
+> **关于 Intel runner**：`macos-13` 镜像已于 2025-12-04 被 GitHub 退役，使用该标签的作业会永久停留在
+> 排队状态。Intel 现用 `macos-15-intel`，该标签计划支持到 2027-08；之后 GitHub Actions 将不再提供
+> x86_64 macOS runner（Apple 已停止支持 Intel 架构）。届时建议只发 Apple Silicon 版。
+
 ### 推荐：用 GitHub Actions 一次出三个版本
+
+推送到 `main` 即自动触发；或手动：
 
 ```bash
 git tag v1.0.0 && git push origin v1.0.0
@@ -62,7 +73,7 @@ git tag v1.0.0 && git push origin v1.0.0
 
 或到仓库页面 → Actions → **Release** → `Run workflow`，填入 tag 后手动触发。
 
-工作流会并行跑三个 runner，产出三个安装包并自动创建 Release。
+工作流会并行跑三个 runner，产出三个安装包并自动创建 Release（发布步骤幂等，tag 已存在则跳过）。
 
 ### 本机手动打包
 
@@ -131,7 +142,8 @@ TubeGet/
 │   ├── make_icon.py       图标生成（PNG / icns / ico）
 │   ├── build_mac.sh       macOS 打包 + DMG
 │   ├── build_win.bat      Windows 打包
-│   └── installer.iss      Inno Setup 安装脚本
+│   ├── installer.iss      Inno Setup 安装脚本
+│   └── languages/         官方中文语言包（vendored，避免依赖 runner 安装内容）
 ├── resources/             图标资源
 └── .github/workflows/release.yml   三平台 CI
 ```
