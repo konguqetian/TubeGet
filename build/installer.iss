@@ -1,13 +1,15 @@
 ; Inno Setup 安装脚本（Windows x64）
-; 编译：iscc build\installer.iss
-; 依赖：choco install innosetup -y
+; 编译：iscc build\installer.iss   （在仓库根目录执行）
+;
+; 注意：Inno Setup 的相對路徑是相對於「腳本所在目錄」（即 build\）解析的，
+; 因此指向仓库根的资源都要寫 ..\ 前綴。
 
 #define MyAppName "TubeGet"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "TubeGet"
 #define MyAppURL "https://github.com/konguqetian/TubeGet"
 #define MyAppExeName "TubeGet.exe"
-#define SrcDir "dist\TubeGet"
+#define SrcDir "..\dist\TubeGet"
 
 [Setup]
 AppId={{E9A6F2C1-3B44-4A7E-9E21-5C8B7D0A1F22}
@@ -22,9 +24,9 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=
-OutputDir=dist
+OutputDir=..\dist
 OutputBaseFilename=TubeGet-Windows-x64-Setup
-SetupIconFile=resources\icon.ico
+SetupIconFile=..\resources\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
