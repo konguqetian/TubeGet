@@ -81,16 +81,20 @@ jobs:
         run: |
           python - <<'PY'
           import pathlib, re
-          v = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', pathlib.Path('src/version.py').read_text()).group(1)
+          # Windows 上 Python 默认编码是 cp1252，读 UTF-8 文件必须显式指定，否则 UnicodeDecodeError
+          v = re.search(r'APP_VERSION\s*=\s*"([^"]+)"',
+                        pathlib.Path('src/version.py').read_text(encoding='utf-8')).group(1)
           p = pathlib.Path('build/installer.iss')
-          p.write_text(re.sub(r'#define MyAppVersion "[^"]*"', f'#define MyAppVersion "{v}"', p.read_text()))
+          t = p.read_text(encoding='utf-8')
+          p.write_text(re.sub(r'#define MyAppVersion "[^"]*"',
+                              f'#define MyAppVersion "{v}"', t), encoding='utf-8')
           print('installer version ->', v)
           PY
       - name: 打包
         run: |
           python build/make_icon.py resources
           python -m PyInstaller build/TubeGet.spec --noconfirm --clean
-          choco install innosetup -y --no-progress
+          if ! command -v iscc >/dev/null 2>&1; then choco install innosetup -y --no-progress; fi
           iscc build/installer.iss
       - uses: actions/upload-artifact@v4
         with:
@@ -121,7 +125,7 @@ jobs:
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            V=$(python3 -c "import re,pathlib;print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"',pathlib.Path('src/version.py').read_text()).group(1))")
+            V=$(python3 -c "import re,pathlib;print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"',pathlib.Path('src/version.py').read_text(encoding='utf-8')).group(1))")
             TAG="v${V}"
           fi
           echo "value=${TAG}" >> "$GITHUB_OUTPUT"
