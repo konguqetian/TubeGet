@@ -1,0 +1,139 @@
+name: Release
+
+# 触发方式：
+#  1) 推送 tag（v*）   -> 构建并发布
+#  2) 推送到 main      -> 构建；若版本 tag 尚不存在则自动发布（幂等，不会重复发版）
+#  3) 手动 Run workflow-> 构建并按输入的 tag 发布
+on:
+  push:
+    tags: ["v*"]
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签，例如 v1.0.0（留空则取 src/version.py）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- macOS Intel (x86_64)
+  macos-intel:
+    name: macOS Intel (x86_64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 打包
+        env:
+          PYTHON: python
+        run: bash build/build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel
+          path: dist/*.dmg
+
+  # ---------------------------------------------------------------- macOS Apple Silicon (arm64)
+  macos-arm:
+    name: macOS Apple Silicon (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 打包
+        env:
+          PYTHON: python
+        run: bash build/build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm
+          path: dist/*.dmg
+
+  # ---------------------------------------------------------------- Windows x64
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 同步版本号到安装脚本
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, re
+          v = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', pathlib.Path('src/version.py').read_text()).group(1)
+          p = pathlib.Path('build/installer.iss')
+          p.write_text(re.sub(r'#define MyAppVersion "[^"]*"', f'#define MyAppVersion "{v}"', p.read_text()))
+          print('installer version ->', v)
+          PY
+      - name: 打包
+        run: |
+          python build/make_icon.py resources
+          python -m PyInstaller build/TubeGet.spec --noconfirm --clean
+          choco install innosetup -y --no-progress
+          iscc build/installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+
+  # ---------------------------------------------------------------- 发布
+  release:
+    name: 创建 Release
+    needs: [macos-intel, macos-arm, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 收集产物
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.dmg' -o -name '*.exe' \) -exec cp {} release/ \;
+          ls -lh release/
+      - name: 解析发布标签
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            V=$(python3 -c "import re,pathlib;print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"',pathlib.Path('src/version.py').read_text()).group(1))")
+            TAG="v${V}"
+          fi
+          echo "value=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "发布标签: ${TAG}"
+      - name: 发布 Release（幂等）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.value }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "标签 ${TAG} 已存在，跳过发布（如需重新发版请删除该 tag）"
+            exit 0
+          fi
+          gh release create "${TAG}" release/* --title "TubeGet ${TAG}" --generate-notes
