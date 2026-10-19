@@ -5,7 +5,7 @@
 #define MyAppName "TubeGet"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "TubeGet"
-#define MyAppURL "https://github.com/OWNER/TubeGet"
+#define MyAppURL "https://github.com/konguqetian/TubeGet"
 #define MyAppExeName "TubeGet.exe"
 #define SrcDir "dist\TubeGet"
 
