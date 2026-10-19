@@ -40,9 +40,11 @@ UninstallDisplayName={#MyAppName} {#MyAppVersion}
 ChangesAssociations=no
 DisableDirPage=auto
 
+; 语言包从仓库内引用（不依赖 runner 上 Inno Setup 自带的内容，版本间有差异）
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
+Name: "chinesetraditional"; MessagesFile: "languages\ChineseTraditional.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
